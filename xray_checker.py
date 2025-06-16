@@ -9,6 +9,7 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.filters.callback_data import CallbackData
+from aiogram.exceptions import TelegramBadRequest
 
 # Загружаем переменные окружения
 load_dotenv()
@@ -162,7 +163,7 @@ async def send_alert(server_name: str, error_message: str):
         server_states[server_name].alert_message_id = message.message_id
         server_states[server_name].current_error = error_message
         
-        logger.info(f"Отправлено новое уведомление о проблеме с сервером {server_name}")
+        logger.info(f"Отправлено новое уведомление о проблеме с сервером {server_name} (ID: {message.message_id})")
         
     except Exception as e:
         logger.error(f"Ошибка отправки уведомления: {e}")
@@ -171,10 +172,12 @@ async def update_alert(server_name: str, is_working: bool, error_message: str = 
     """Обновляет существующее уведомление о статусе сервера"""
     try:
         if server_name not in server_states or not server_states[server_name].alert_message_id:
+            logger.warning(f"Нет активного уведомления для сервера {server_name}, пропускаем обновление")
             return
         
         state = server_states[server_name]
         current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        message_id = state.alert_message_id
         
         if is_working:
             # Сервер восстановился
@@ -199,17 +202,36 @@ async def update_alert(server_name: str, is_working: bool, error_message: str = 
                         f"Обнаружено: {state.first_failure_time}\n" \
                         f"Время: {current_time}"
         
-        await bot.edit_message_text(
-            chat_id=ADMIN_ID,
-            message_id=state.alert_message_id,
-            text=alert_text,
-            parse_mode='HTML'
-        )
-        
-        logger.info(f"Обновлено уведомление для сервера {server_name}: {'восстановлен' if is_working else 'по-прежнему недоступен'}")
-        
+        try:
+            await bot.edit_message_text(
+                chat_id=ADMIN_ID,
+                message_id=message_id,
+                text=alert_text,
+                parse_mode='HTML'
+            )
+            
+            logger.info(f"Обновлено уведомление для сервера {server_name} (ID: {message_id}): {'восстановлен' if is_working else 'по-прежнему недоступен'}")
+            
+        except TelegramBadRequest as e:
+            if "message to edit not found" in str(e).lower() or "message_id_invalid" in str(e).lower():
+                logger.warning(f"Сообщение {message_id} для сервера {server_name} не найдено, отправляем новое уведомление")
+                # Сообщение не существует, сбрасываем состояние и отправляем новое
+                state.alert_message_id = None
+                if not is_working:
+                    # Если сервер все еще недоступен, отправляем новое уведомление
+                    await send_alert(server_name, error_message)
+                else:
+                    # Если сервер восстановился, просто сбрасываем состояние
+                    state.is_down = False
+            else:
+                # Другая ошибка Telegram
+                raise e
+                
     except Exception as e:
         logger.error(f"Ошибка обновления уведомления для {server_name}: {e}")
+        # В случае любой ошибки сбрасываем ID сообщения
+        if server_name in server_states:
+            server_states[server_name].alert_message_id = None
 
 async def process_server_status(server_name: str, is_working: bool, error_message: str):
     """Обрабатывает изменение статуса сервера"""
@@ -226,10 +248,19 @@ async def process_server_status(server_name: str, is_working: bool, error_messag
         elif state.alert_message_id:
             # Сервер уже был недоступен - обновляем существующее сообщение
             await update_alert(server_name, False, error_message)
+        else:
+            # Сервер недоступен, но нет активного уведомления - отправляем новое
+            logger.info(f"Сервер {server_name} недоступен, но нет активного уведомления, отправляем новое")
+            await send_alert(server_name, error_message)
     else:  # Сервер работает
         if state.is_down and state.alert_message_id:
             # Сервер восстановился - обновляем сообщение в последний раз
             await update_alert(server_name, True)
+        elif state.is_down:
+            # Сервер восстановился, но нет активного уведомления - просто сбрасываем состояние
+            logger.info(f"Сервер {server_name} восстановился, сбрасываем состояние")
+            state.is_down = False
+            state.alert_message_id = None
 
 async def monitoring_loop():
     """Основной цикл мониторинга"""
