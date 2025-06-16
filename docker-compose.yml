@@ -9,9 +9,6 @@ services:
       - PYTHONUNBUFFERED=1
     env_file:
       - .env
-    volumes:
-      # Монтируем директорию для логов
-      - ./logs:/app/logs
     networks:
       - xray-network
     healthcheck:
@@ -24,7 +21,3 @@ services:
 networks:
   xray-network:
     driver: bridge
-
-volumes:
-  logs:
-    driver: local

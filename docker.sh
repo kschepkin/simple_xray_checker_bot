@@ -111,12 +111,8 @@ status() {
     print_status "Использование ресурсов:"
     docker stats xray-checker-bot --no-stream 2>/dev/null || print_warning "Контейнер не запущен"
     echo
-    print_status "Логи бота (последние 10 строк):"
-    if [ -f "./logs/xray_checker.log" ]; then
-        tail -n 10 ./logs/xray_checker.log
-    else
-        print_warning "Файл логов не найден"
-    fi
+    print_status "Последние логи контейнера (10 строк):"
+    docker-compose logs --tail=10 xray-checker 2>/dev/null || print_warning "Контейнер не запущен"
 }
 
 # Очистка (удаление контейнера и образа)

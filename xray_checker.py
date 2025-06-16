@@ -13,16 +13,12 @@ from aiogram.filters.callback_data import CallbackData
 # Загружаем переменные окружения
 load_dotenv()
 
-# Создаем директорию для логов если её нет
-os.makedirs('/app/logs', exist_ok=True)
-
-# Настройка логирования
+# Настройка логирования - только в stdout
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('/app/logs/xray_checker.log'),
-        logging.StreamHandler()
+        logging.StreamHandler()  # Только в stdout
     ]
 )
 logger = logging.getLogger(__name__)
