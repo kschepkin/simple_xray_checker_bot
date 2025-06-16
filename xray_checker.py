@@ -59,59 +59,6 @@ class ServerState:
 class CheckCallback(CallbackData, prefix="check"):
     action: str
 
-async def check_server(session: aiohttp.ClientSession, name: str, url: str) -> Tuple[str, bool, str]:
-    """
-    Проверяет статус сервера
-    
-    Args:
-        session: HTTP сессия
-        name: Имя сервера
-        url: URL для проверки
-    
-    Returns:
-        Tuple[str, bool, str]: (имя_сервера, успех, сообщение)
-    """
-    try:
-        timeout = aiohttp.ClientTimeout(total=30)
-        
-        # Настройки для поддержки как HTTP, так и HTTPS
-        connector = aiohttp.TCPConnector(
-            ssl=False,  # Разрешаем незащищенные соединения
-            verify_ssl=False,  # Отключаем проверку SSL сертификатов
-            limit=100,
-            limit_per_host=10
-        )
-        
-        # Создаем новую сессию с правильными настройками для этого запроса
-        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as temp_session:
-            async with temp_session.get(url) as response:
-                text = await response.text()
-                
-                if response.status == 200 and text.strip() == "OK":
-                    logger.info(f"Сервер {name} работает нормально")
-                    return name, True, "OK"
-                else:
-                    error_msg = f"Неожиданный ответ: {text[:100]}"
-                    logger.warning(f"Сервер {name}: {error_msg}")
-                    return name, False, error_msg
-                
-    except asyncio.TimeoutError:
-        error_msg = "Превышено время ожидания"
-        logger.error(f"Сервер {name}: {error_msg}")
-        return name, False, error_msg
-    except aiohttp.ClientConnectorError as e:
-        error_msg = f"Ошибка подключения: {str(e)}"
-        logger.error(f"Сервер {name}: {error_msg}")
-        return name, False, error_msg
-    except aiohttp.ClientSSLError as e:
-        error_msg = f"Ошибка SSL: {str(e)}"
-        logger.error(f"Сервер {name}: {error_msg}")
-        return name, False, error_msg
-    except Exception as e:
-        error_msg = f"Общая ошибка: {str(e)}"
-        logger.error(f"Сервер {name}: {error_msg}")
-        return name, False, error_msg
-
 async def check_all_servers() -> Dict[str, Tuple[bool, str]]:
     """
     Проверяет все серверы параллельно
@@ -121,10 +68,9 @@ async def check_all_servers() -> Dict[str, Tuple[bool, str]]:
     """
     results = {}
     
-    # Создаем коннектор с настройками для HTTP и HTTPS
+    # Создаем коннектор с правильными настройками для HTTP и HTTPS
     connector = aiohttp.TCPConnector(
-        ssl=False,  # Разрешаем HTTP
-        verify_ssl=False,  # Не проверяем SSL сертификаты
+        ssl=False,  # Отключаем SSL проверку для всех соединений
         limit=100,
         limit_per_host=10,
         enable_cleanup_closed=True
