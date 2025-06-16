@@ -3,7 +3,7 @@ import asyncio
 import aiohttp
 import logging
 from datetime import datetime
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Optional
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
@@ -43,6 +43,18 @@ SERVERS = load_servers()
 # Инициализация бота
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 dp = Dispatcher()
+
+# Глобальное хранилище состояний серверов
+server_states = {}
+
+class ServerState:
+    def __init__(self, name: str):
+        self.name = name
+        self.is_down = False
+        self.first_failure_time = None
+        self.last_update_time = None
+        self.alert_message_id = None
+        self.current_error = None
 
 class CheckCallback(CallbackData, prefix="check"):
     action: str
@@ -105,22 +117,100 @@ async def check_all_servers() -> Dict[str, Tuple[bool, str]]:
     return results
 
 async def send_alert(server_name: str, error_message: str):
-    """Отправляет уведомление администратору о проблеме с сервером"""
+    """Отправляет новое уведомление администратору о проблеме с сервером"""
     try:
+        current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
         alert_text = f"🚨 <b>ВНИМАНИЕ!</b>\n\n" \
                     f"Сервер: <code>{server_name}</code>\n" \
-                    f"Статус: ❌ Недоступен\n" \
-                    f"Ошибка: <code>{error_message}</code>\n" \
-                    f"Время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                    f"Текущий статус: ❌ Недоступен\n" \
+                    f"Обнаружено: {current_time}\n" \
+                    f"Время: {current_time}"
         
-        await bot.send_message(
+        message = await bot.send_message(
             chat_id=ADMIN_ID,
             text=alert_text,
             parse_mode='HTML'
         )
-        logger.info(f"Отправлено уведомление о проблеме с сервером {server_name}")
+        
+        # Сохраняем ID сообщения для дальнейших обновлений
+        if server_name not in server_states:
+            server_states[server_name] = ServerState(server_name)
+        
+        server_states[server_name].is_down = True
+        server_states[server_name].first_failure_time = current_time
+        server_states[server_name].last_update_time = current_time
+        server_states[server_name].alert_message_id = message.message_id
+        server_states[server_name].current_error = error_message
+        
+        logger.info(f"Отправлено новое уведомление о проблеме с сервером {server_name}")
+        
     except Exception as e:
         logger.error(f"Ошибка отправки уведомления: {e}")
+
+async def update_alert(server_name: str, is_working: bool, error_message: str = None):
+    """Обновляет существующее уведомление о статусе сервера"""
+    try:
+        if server_name not in server_states or not server_states[server_name].alert_message_id:
+            return
+        
+        state = server_states[server_name]
+        current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        if is_working:
+            # Сервер восстановился
+            alert_text = f"🚨 <b>ВНИМАНИЕ!</b>\n\n" \
+                        f"Сервер: <code>{server_name}</code>\n" \
+                        f"Текущий статус: ✅ Доступен\n" \
+                        f"Обнаружено: {state.first_failure_time}\n" \
+                        f"Время: {current_time}"
+            
+            # После восстановления больше не обновляем сообщение
+            state.is_down = False
+            state.alert_message_id = None
+            
+        else:
+            # Сервер по-прежнему недоступен
+            state.current_error = error_message
+            state.last_update_time = current_time
+            
+            alert_text = f"🚨 <b>ВНИМАНИЕ!</b>\n\n" \
+                        f"Сервер: <code>{server_name}</code>\n" \
+                        f"Текущий статус: ❌ Недоступен\n" \
+                        f"Обнаружено: {state.first_failure_time}\n" \
+                        f"Время: {current_time}"
+        
+        await bot.edit_message_text(
+            chat_id=ADMIN_ID,
+            message_id=state.alert_message_id,
+            text=alert_text,
+            parse_mode='HTML'
+        )
+        
+        logger.info(f"Обновлено уведомление для сервера {server_name}: {'восстановлен' if is_working else 'по-прежнему недоступен'}")
+        
+    except Exception as e:
+        logger.error(f"Ошибка обновления уведомления для {server_name}: {e}")
+
+async def process_server_status(server_name: str, is_working: bool, error_message: str):
+    """Обрабатывает изменение статуса сервера"""
+    # Инициализируем состояние сервера если его нет
+    if server_name not in server_states:
+        server_states[server_name] = ServerState(server_name)
+    
+    state = server_states[server_name]
+    
+    if not is_working:  # Сервер недоступен
+        if not state.is_down:
+            # Сервер только что упал - отправляем новое уведомление
+            await send_alert(server_name, error_message)
+        elif state.alert_message_id:
+            # Сервер уже был недоступен - обновляем существующее сообщение
+            await update_alert(server_name, False, error_message)
+    else:  # Сервер работает
+        if state.is_down and state.alert_message_id:
+            # Сервер восстановился - обновляем сообщение в последний раз
+            await update_alert(server_name, True)
 
 async def monitoring_loop():
     """Основной цикл мониторинга"""
@@ -132,10 +222,9 @@ async def monitoring_loop():
             logger.info("Начинаем проверку серверов...")
             results = await check_all_servers()
             
-            # Проверяем результаты и отправляем уведомления при ошибках
+            # Обрабатываем результаты для каждого сервера
             for server_name, (success, message) in results.items():
-                if not success:
-                    await send_alert(server_name, message)
+                await process_server_status(server_name, success, message)
             
             # Ждем следующую проверку
             await asyncio.sleep(CHECK_INTERVAL * 60)
