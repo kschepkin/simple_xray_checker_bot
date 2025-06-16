@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  xray-checker:
+    build: .
+    container_name: xray-checker-bot
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
+    env_file:
+      - .env
+    volumes:
+      # Монтируем директорию для логов
+      - ./logs:/app/logs
+    networks:
+      - xray-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; exit(0 if os.path.exists('/app/xray_checker.py') else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+networks:
+  xray-network:
+    driver: bridge
+
+volumes:
+  logs:
+    driver: local
