@@ -9,6 +9,9 @@ RUN apt-get update && apt-get install -y \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
+# Создаем пользователя для безопасности (не root)
+RUN adduser --disabled-password --gecos '' appuser
+
 # Копируем файл зависимостей
 COPY requirements.txt .
 
@@ -20,12 +23,12 @@ RUN pip install --no-cache-dir --upgrade pip && \
 COPY xray_checker.py .
 COPY .env .
 
-# Создаем директорию для логов
-RUN mkdir -p /app/logs
+# Создаем директорию для логов и устанавливаем права
+RUN mkdir -p /app/logs && \
+    chown -R appuser:appuser /app && \
+    chmod -R 755 /app/logs
 
-# Создаем пользователя для безопасности (не root)
-RUN adduser --disabled-password --gecos '' appuser && \
-    chown -R appuser:appuser /app
+# Переключаемся на пользователя appuser
 USER appuser
 
 # Устанавливаем переменные окружения
