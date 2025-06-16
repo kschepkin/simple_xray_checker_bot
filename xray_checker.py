@@ -59,6 +59,59 @@ class ServerState:
 class CheckCallback(CallbackData, prefix="check"):
     action: str
 
+async def check_server(session: aiohttp.ClientSession, name: str, url: str) -> Tuple[str, bool, str]:
+    """
+    Проверяет статус сервера
+    
+    Args:
+        session: HTTP сессия
+        name: Имя сервера
+        url: URL для проверки
+    
+    Returns:
+        Tuple[str, bool, str]: (имя_сервера, успех, сообщение)
+    """
+    try:
+        timeout = aiohttp.ClientTimeout(total=30)
+        
+        # Настройки для поддержки как HTTP, так и HTTPS
+        connector = aiohttp.TCPConnector(
+            ssl=False,  # Разрешаем незащищенные соединения
+            verify_ssl=False,  # Отключаем проверку SSL сертификатов
+            limit=100,
+            limit_per_host=10
+        )
+        
+        # Создаем новую сессию с правильными настройками для этого запроса
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as temp_session:
+            async with temp_session.get(url) as response:
+                text = await response.text()
+                
+                if response.status == 200 and text.strip() == "OK":
+                    logger.info(f"Сервер {name} работает нормально")
+                    return name, True, "OK"
+                else:
+                    error_msg = f"Неожиданный ответ: {text[:100]}"
+                    logger.warning(f"Сервер {name}: {error_msg}")
+                    return name, False, error_msg
+                
+    except asyncio.TimeoutError:
+        error_msg = "Превышено время ожидания"
+        logger.error(f"Сервер {name}: {error_msg}")
+        return name, False, error_msg
+    except aiohttp.ClientConnectorError as e:
+        error_msg = f"Ошибка подключения: {str(e)}"
+        logger.error(f"Сервер {name}: {error_msg}")
+        return name, False, error_msg
+    except aiohttp.ClientSSLError as e:
+        error_msg = f"Ошибка SSL: {str(e)}"
+        logger.error(f"Сервер {name}: {error_msg}")
+        return name, False, error_msg
+    except Exception as e:
+        error_msg = f"Общая ошибка: {str(e)}"
+        logger.error(f"Сервер {name}: {error_msg}")
+        return name, False, error_msg
+
 async def check_all_servers() -> Dict[str, Tuple[bool, str]]:
     """
     Проверяет все серверы параллельно
@@ -68,9 +121,10 @@ async def check_all_servers() -> Dict[str, Tuple[bool, str]]:
     """
     results = {}
     
-    # Создаем коннектор с правильными настройками для HTTP и HTTPS
+    # Создаем коннектор с настройками для HTTP и HTTPS
     connector = aiohttp.TCPConnector(
-        ssl=False,  # Отключаем принудительное использование SSL
+        ssl=False,  # Разрешаем HTTP
+        verify_ssl=False,  # Не проверяем SSL сертификаты
         limit=100,
         limit_per_host=10,
         enable_cleanup_closed=True
@@ -106,38 +160,17 @@ async def check_server_direct(session: aiohttp.ClientSession, name: str, url: st
     try:
         logger.info(f"Проверяем сервер {name}: {url}")
         
-        # Определяем, нужно ли использовать SSL
-        if url.startswith('https://'):
-            # Для HTTPS создаем отдельный контекст
-            import ssl
-            ssl_context = ssl.create_default_context()
-            ssl_context.check_hostname = False
-            ssl_context.verify_mode = ssl.CERT_NONE
+        async with session.get(url) as response:
+            text = await response.text()
+            logger.info(f"Сервер {name} ответил со статусом {response.status}: {text[:50]}")
             
-            async with session.get(url, ssl=ssl_context) as response:
-                text = await response.text()
-                logger.info(f"Сервер {name} ответил со статусом {response.status}: {text[:50]}")
-                
-                if response.status == 200 and text.strip() == "OK":
-                    logger.info(f"Сервер {name} работает нормально")
-                    return name, True, "OK"
-                else:
-                    error_msg = f"Неожиданный ответ (статус {response.status}): {text[:100]}"
-                    logger.warning(f"Сервер {name}: {error_msg}")
-                    return name, False, error_msg
-        else:
-            # Для HTTP обычный запрос
-            async with session.get(url) as response:
-                text = await response.text()
-                logger.info(f"Сервер {name} ответил со статусом {response.status}: {text[:50]}")
-                
-                if response.status == 200 and text.strip() == "OK":
-                    logger.info(f"Сервер {name} работает нормально")
-                    return name, True, "OK"
-                else:
-                    error_msg = f"Неожиданный ответ (статус {response.status}): {text[:100]}"
-                    logger.warning(f"Сервер {name}: {error_msg}")
-                    return name, False, error_msg
+            if response.status == 200 and text.strip() == "OK":
+                logger.info(f"Сервер {name} работает нормально")
+                return name, True, "OK"
+            else:
+                error_msg = f"Неожиданный ответ (статус {response.status}): {text[:100]}"
+                logger.warning(f"Сервер {name}: {error_msg}")
+                return name, False, error_msg
                 
     except asyncio.TimeoutError:
         error_msg = "Превышено время ожидания"
